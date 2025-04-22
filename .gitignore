@@ -11,6 +11,7 @@ envs/
 # Raw data from shapefile & R‑data exports
 /data/raw/PCODE*
 /data/raw/*.rdata
+/data/processed/*.parquet
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
