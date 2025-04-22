@@ -1,0 +1,20 @@
+name: envs
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pandas=2.2.3
+  - numpy=2.2.2
+  - pyreadr
+  - ipykernel
+  - matplotlib=3.8.2
+  - seaborn=0.13.2
+  - statsmodels=0.14.4
+  - xgboost=2.1.1
+  - shap=0.46.0
+  - pyyaml=6.0.2
+  - geopandas=0.14.2
+  - pyogrio=0.10.0
+  - folium=0.14.0
+  - plotly=5.22.0

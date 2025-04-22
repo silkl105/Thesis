@@ -1,0 +1,8 @@
+# Data paths relative to project root
+raw_path: "data/raw"
+processed_path: "data/processed"
+
+# Specific data files
+raw_files:
+  transactions: "data/raw/SilvioKlein_Transactions.rdata"
+  shapefile: "data/raw/PCODE_2024_PT.shp"
