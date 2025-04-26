@@ -244,6 +244,7 @@ class DataProcessor:
             "id",
             "date_of_transaction_yearquarter",
             "date_of_transaction_year",
+            "date_of_transaction_month"
         ]
         df_xgb = df.drop(columns=drop_cols).copy()
 
@@ -257,10 +258,11 @@ class DataProcessor:
         )
         df_xgb.drop(columns=["global_price_1m_prior"], inplace=True)
 
-        # -- local lags: add diff -------------------
+        # -- local lags: keep only 2-year level + diff -------------------
         df_xgb["pc6_price_6m_minus_2y"] = (
             df_xgb["pc6_price_6m_prior"] - df_xgb["pc6_price_2y_prior"]
         )
+        df_xgb.drop(columns=["global_price_1m_prior"], inplace=True)
 
         # ---------- OLS encoding --------------------------------------
         df_lin = df_xgb.copy()
