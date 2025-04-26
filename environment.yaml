@@ -1,7 +1,7 @@
 name: envs
 channels:
-  - defaults
   - conda-forge
+  - defaults
 dependencies:
   - python=3.11
   - pandas=2.2.3
@@ -18,3 +18,5 @@ dependencies:
   - pyogrio=0.10.0
   - folium=0.14.0
   - plotly=5.22.0
+  - pyarrow=19.0.1
+  - duckdb=1.2.1

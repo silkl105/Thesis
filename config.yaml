@@ -1,8 +1,12 @@
 # Data paths relative to project root
 raw_path: "data/raw"
 processed_path: "data/processed"
+figs_path: "figs"
 
 # Specific data files
 raw_files:
   transactions: "data/raw/SilvioKlein_Transactions.rdata"
   shapefile: "data/raw/PCODE_2024_PT.shp"
+  processed_transactions: "data/processed/processed_data.parquet"
+  provinces_map: data/raw/provincies_2025.geojson
+  nuts3_map: data/raw/coropgebied_2025.geojson
