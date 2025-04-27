@@ -296,7 +296,9 @@ class EDA:
     # ---------- correlation matrix ------------------------------------
     def correlation_matrix(self) -> None:
         """Lower-triangle heatmap of Pearson correlations."""
-        corr = self.df.corr(numeric_only=True)
+        df = self.df.copy().drop(columns=['date_of_listing_month', 'date_of_transaction_month', 'date_of_transaction_year',
+                                          'unit_id', 'id', 'property_id', 'housenumber'])
+        corr = df.corr(numeric_only=True)
         mask = np.triu(np.ones_like(corr, dtype=bool))
         fig, ax = plt.subplots(figsize=(12, 10))
         sns.heatmap(corr, mask=mask, annot=True, fmt=".2f", cmap="vlag", ax=ax)
