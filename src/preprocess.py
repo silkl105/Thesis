@@ -46,9 +46,21 @@ class DataProcessor:
         self.proc_path: Path = root / self.config["processed_path"]
         self.rdata_file: Path = root / self.config["raw_files"]["transactions"]
         self.shp_file: Path = root / self.config["raw_files"]["shapefile"]
+        self.systemic_stress_file: Path = root / self.config["raw_files"]["systemic_stress"]
+        self.mortgage_rate_file: Path = root / self.config["raw_files"]["mortgage_rate"]
+        self.unemployment_file: Path = root / self.config["raw_files"]["unemloyment_rate"]
 
         self.proc_path.mkdir(parents=True, exist_ok=True)
         self.save_option = save_option
+        
+        # Schema for linear-model pipeline
+        self.center_cols = ["construction_yr", "date_of_listing"]
+        self.scale_cols = [
+            "global_price_6m_prior",
+            "global_price_1m_minus_6m",
+            "pc6_price_2y_prior",
+            "pc6_price_6m_minus_2y",
+        ]
 
     # public driver ---------------------------------------------------
     def process_all(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -161,6 +173,7 @@ class DataProcessor:
         * Create hierarchical rolling-mean price features
           (PC6→PC5→PC4→NUTS3→NUTS2→Global) for 6m and 2y.
         * Add global rolling means (1m and 6m).
+        * Add external indicators (CISS, unemployment rate, mortgage rate)
         """
         df = self._attach_geography(df)
         df = self._add_temporal_columns(df)
@@ -174,6 +187,44 @@ class DataProcessor:
                 "global_price_6m_prior",
             ]
         )
+
+        # --- external indicators: CISS, unemployment, mortgage rate ---
+        stress_df = pd.read_csv(self.systemic_stress_file, sep=',')
+        stress_df["DATE"] = pd.to_datetime(stress_df["DATE"], format="%d.%m.%y", dayfirst=True)
+        stress_df = (
+            stress_df
+            .set_index("DATE")[["NEW CISS - Composite Indicator of Systemic Stress. (CISS.D.NL.Z0Z.4F.EC.SS_CIN.IDX)"]]
+            .rename(columns={
+                "NEW CISS - Composite Indicator of Systemic Stress. (CISS.D.NL.Z0Z.4F.EC.SS_CIN.IDX)": "ciss"
+            })
+        )
+        stress_monthly = stress_df.resample("ME").mean()
+        stress_monthly.index = stress_monthly.index.to_period("M")
+        full_index = pd.period_range(start="1996-01", end=stress_monthly.index.max(), freq="M")
+        stress_monthly = stress_monthly.reindex(full_index)
+        mask = (
+            (stress_monthly.index < pd.Period("1996-01", "M")) |
+            (stress_monthly.index > pd.Period("1998-12", "M"))
+        )
+        median_val = stress_monthly.loc[mask, "ciss"].median()
+        # Fill missing 1996-01 to 1998-12 with median
+        stress_monthly.loc[pd.Period("1996-01", "M"):pd.Period("1998-12", "M"), "ciss"] = median_val
+        stress_series = stress_monthly["ciss"]
+
+        unemp_df = pd.read_csv(self.unemployment_file, sep=',')
+        unemp_df["observation_date"] = pd.to_datetime(unemp_df["observation_date"], format="%d.%m.%y")
+        unemp_series = unemp_df.set_index(unemp_df["observation_date"].dt.to_period("M"))["LRHUTTTTNLM156S"].rename("unemployment_rate")
+
+        mort_df = pd.read_csv(self.mortgage_rate_file, sep=',')
+        mort_df["DATE"] = pd.to_datetime(mort_df["DATE"], format="%d.%m.%y")
+        rate_col = "Bank interest rates - loans to households for house purchase (new business) - Netherlands (MIR.M.NL.B.A2C.A.R.A.2250.EUR.N)"
+        mort_series = mort_df.set_index(mort_df["DATE"].dt.to_period("M"))[rate_col].rename("mortgage_rate")
+
+        df["period"] = df["date_of_listing"].dt.to_period("M") - 1
+        df["ciss"] = df["period"].map(stress_series)
+        df["unemployment_rate"] = df["period"].map(unemp_series)
+        df["mortgage_rate"] = df["period"].map(mort_series)
+        df.drop(columns=["period"], inplace=True)
         return df
 
     # stage 4 – final modelling prep -------------------------------------
@@ -199,18 +250,8 @@ class DataProcessor:
                 "grachtenpand": "woonboerderij",
                 "landhuis": "villa",
             },
-            # Quality: merge in-between categories based on mean price ladders
-            "qual_inside": {
-                "goed tot uitstekend": "uitstekend",
-                "slecht tot matig": "slecht",
-                "matig tot redelijk": "redelijk",
-                "redelijk tot goed": "redelijk",
-            },
+            # Quality: merge small category based on mean price ladders
             "qual_outside": {
-                "goed tot uitstekend": "uitstekend",
-                "slecht tot matig": "slecht",
-                "matig tot redelijk": "redelijk",
-                "redelijk tot goed": "redelijk",
                 "onbekend [MP]": "slecht",
             },
             # Shed: price driven mainly by material, not siting
@@ -229,6 +270,19 @@ class DataProcessor:
             df[col] = (
                 df[col].astype(str).replace(mapper).astype("category")
             )
+        
+        # Encode quality levels as one ordered category (high correlation)
+        qual_levels = ["slecht", "slecht tot matig", "matig", "matig tot redelijk",
+                       "redelijk", "redelijk tot goed", "goed", 
+                       "goed tot uitstekend", "uitstekend"]
+        
+        for qcol in ["qual_inside", "qual_outside"]:
+            df[qcol] = pd.Categorical(
+                df[qcol], categories=qual_levels, ordered=True
+            ).codes
+        
+        df['quality'] = (df['qual_inside'] + df['qual_outside']) / 2
+        df = df.drop(columns=['qual_inside', 'qual_outside'])
 
         # ---------- drop columns not to be used by models -------------
         drop_cols = [
@@ -244,7 +298,11 @@ class DataProcessor:
             "id",
             "date_of_transaction_yearquarter",
             "date_of_transaction_year",
-            "date_of_transaction_month"
+            "date_of_transaction_month",
+            "pc6", "pc5", "pc4", "province", # duplicate info with nuts3_region and lon/lat
+            "place", "nuts2_region",         # duplicate info with nuts3_region and lon/lat
+            "construction_per",              # duplicate info with construction_yr
+            "use_type"                       # small categories, adds insignificant amount of predictive power
         ]
         df_xgb = df.drop(columns=drop_cols).copy()
 
@@ -262,7 +320,9 @@ class DataProcessor:
         df_xgb["pc6_price_6m_minus_2y"] = (
             df_xgb["pc6_price_6m_prior"] - df_xgb["pc6_price_2y_prior"]
         )
-        df_xgb.drop(columns=["global_price_1m_prior"], inplace=True)
+        df_xgb.drop(columns=["pc6_price_6m_prior"], inplace=True)
+
+        df_xgb = df_xgb.sort_values('date_of_listing')
 
         # ---------- OLS encoding --------------------------------------
         df_lin = df_xgb.copy()
@@ -270,41 +330,21 @@ class DataProcessor:
         df_lin = pd.get_dummies(
             df_lin,
             columns=[
-                "use_type",
                 "property_class",
                 "property_type",
                 "shed",
-                "monument",
-                "province",
                 "nuts3_region",
+                "monument"
             ],
             drop_first=True,
         )
 
-        period_order = [
-            "<1906",
-            "1906-1930",
-            "1931-1944",
-            "1945-1959",
-            "1960-1970",
-            "1971-1980",
-            "1981-1990",
-            "1991-2000",
-            "2001-2010",
-            "2011-2020",
-            "Unknown",
-        ]
-        df_lin["construction_per"] = pd.Categorical(
-            df_lin["construction_per"], categories=period_order, ordered=True
-        ).codes
-
-        qual_levels = ["slecht", "matig", "redelijk", "goed", "uitstekend"]
-        for qcol in ["qual_inside", "qual_outside"]:
-            df_lin[qcol] = pd.Categorical(
-                df_lin[qcol], categories=qual_levels, ordered=True
-            ).codes
-
         df_lin["date_of_listing"] = df_lin["date_of_listing"].apply(lambda d: d.toordinal())
+
+        # Change boolean columns to 0/1
+        bool_cols = df_lin.select_dtypes(include=['bool']).columns
+        df_lin[bool_cols] = df_lin[bool_cols].astype(float)
+        df_lin = df_lin.sort_values('date_of_listing')
 
         return df_xgb, df_lin
 
@@ -343,19 +383,6 @@ class DataProcessor:
         """
         Decode R “integer64” columns that land in Python as
         tiny-looking ``float64`` values (≈9 × 10⁻³²¹).
-
-        Context
-        -------
-        *construction_yr* and *unit_surface* were stored in the R
-        workspace as `bit64::integer64`, whose raw 64‑bit integer
-        payloads are simply re‑interpreted by R as doubles.
-        When the data are round‑tripped through **pyreadr** they
-        arrive in pandas as ``float64`` with *identical* underlying
-        bits.
-
-        All we need to do is view those bits as signed 64‑bit
-        integers – **no byte‑swapping or heuristics required** – and
-        then cast to pandas’ nullable ``Int64``.
         """
         # View the raw float64 buffer as int64
         arr_f = s.to_numpy(dtype="float64")
@@ -473,7 +500,6 @@ class DataProcessor:
         con.register("tbl", slim)
 
         def tpl(level: str, field: str, win: str) -> str:
-            # Determine alias suffix: e.g. "2 years" -> "2y", "6 months" -> "6m"
             num, unit = win.split()
             suffix = f"{num}{unit[0]}"
             return f"""
