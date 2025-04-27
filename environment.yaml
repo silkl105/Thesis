@@ -20,3 +20,4 @@ dependencies:
   - plotly=5.22.0
   - pyarrow=19.0.1
   - duckdb=1.2.1
+  - xlsxwriter

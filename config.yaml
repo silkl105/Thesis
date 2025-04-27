@@ -7,6 +7,10 @@ figs_path: "figs"
 raw_files:
   transactions: "data/raw/SilvioKlein_Transactions.rdata"
   shapefile: "data/raw/PCODE_2024_PT.shp"
-  processed_transactions: "data/processed/processed_data.parquet"
   provinces_map: data/raw/provincies_2025.geojson
   nuts3_map: data/raw/coropgebied_2025.geojson
+  mortgage_rate: data/raw/nld_mortgage_rate.csv
+  systemic_stress: data/raw/nld_systemic_stress.csv
+  unemloyment_rate: data/raw/nld_unemployment.csv
+  processed_transactions: "data/processed/processed_data.parquet"
+  processed_lin: data/processed/processed_data_lin.parquet
