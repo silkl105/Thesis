@@ -322,6 +322,7 @@ class DataProcessor:
         )
         df_xgb.drop(columns=["pc6_price_6m_prior"], inplace=True)
 
+        df_xgb["date_of_listing"] = df_xgb["date_of_listing"].apply(lambda d: d.toordinal())
         df_xgb = df_xgb.sort_values('date_of_listing')
 
         # ---------- OLS encoding --------------------------------------
@@ -338,8 +339,6 @@ class DataProcessor:
             ],
             drop_first=True,
         )
-
-        df_lin["date_of_listing"] = df_lin["date_of_listing"].apply(lambda d: d.toordinal())
 
         # Change boolean columns to 0/1
         bool_cols = df_lin.select_dtypes(include=['bool']).columns
