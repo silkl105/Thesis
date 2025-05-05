@@ -6,8 +6,8 @@ from __future__ import annotations
 * Ridge regression (full X) evaluated with a 10-fold
   expanding-window TimeSeriesSplit (≈80/20 within each fold).
   The best regularisation strength (λ) is chosen inside each fold via
-  nested cross-validation (RidgeCV). Forecast accuracy metrics are
-  stored to Excel, one row per fold.
+  Bayesian hyperparameter search (BayesSearchCV) with time-aware splits.
+  Forecast accuracy metrics are stored to Excel, one row per fold.
 * OLS (same design matrix) fitted once to the whole sample for
   coefficient interpretation only.  We report point estimates +
   heteroskedasticity-robust HC3 s.e., and map each term to a manual
@@ -17,31 +17,28 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 import json
+import yaml
 from sklearn.compose import ColumnTransformer
-from sklearn.linear_model import Ridge, RidgeCV
+from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error
-from sklearn.model_selection import TimeSeriesSplit, GridSearchCV
-from tqdm import tqdm
-from sklearn.pipeline import Pipeline
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+from tqdm import tqdm
+from skopt import BayesSearchCV
+from skopt.space import Real
 from statsmodels.stats.diagnostic import het_breuschpagan
 from statsmodels.stats.stattools import durbin_watson
-from statsmodels.stats.outliers_influence import variance_inflation_factor, OLSInfluence
-from statsmodels.stats.diagnostic import acorr_ljungbox
-import yaml
+from statsmodels.stats.outliers_influence import variance_inflation_factor
 from src.preprocess import DataProcessor
 
 __all__ = ["RidgeRunner"]
 
-
-# ---------------------------------------------------------------------
 # helpers – metrics ----------------------------------------------------
-
 def _mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     """
     Mean absolute percentage error on original EUR scale (values > 0).
@@ -63,11 +60,10 @@ def _mdape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return np.median(pct_err) * 100
 
 
-# ---------------------------------------------------------------------
 # main class -----------------------------------------------------------
-
 class RidgeRunner:
-    """Run Ridge-CV + OLS on the processed *linear* dataset.
+    """
+    Run Ridge-CV + OLS on the processed linear dataset.
 
     Parameters
     ----------
@@ -78,7 +74,7 @@ class RidgeRunner:
         coefficients will be written.  If it exists it is overwritten.
     """
     def __init__(self, config_path: Optional[str] = None, *,
-        metrics_path: str | Path = "data/processed/ols_results.xlsx",
+        metrics_path: str | Path = "data/processed/ridge_results.xlsx",
         save_option: bool = False,
         target: Optional[str] = 'transaction_price',
     ) -> None:
@@ -131,10 +127,13 @@ class RidgeRunner:
     # ------------------------------------------------------------------
     # internal – ridge --------------------------------------------------
     def _ridge_cv(self) -> pd.DataFrame:
-        """10-fold expanding-window CV with inner RidgeCV for λ.
+        """
+        10-fold expanding-window CV with Bayesian search for alpha.
 
-        Additionally, saves per-observation out-of-fold predictions to disk,
-        and computes % of test predictions within 5%, 10%, and 20% error for each fold.
+        Performs a Bayesian hyperparameter optimization (BayesSearchCV)
+        over a log-uniform alpha space on each fold.
+        Saves per-observation out-of-fold predictions and computes
+        error metrics for each fold.
         """
         n_splits = 10
         block_size = int(round(len(self.X) / n_splits))
@@ -151,16 +150,18 @@ class RidgeRunner:
             X_test = self.X.iloc[test_idx]
             y_test = self.y[test_idx]
 
-            # Use GridSearchCV with verbose progress
-            ridge_grid = GridSearchCV(
+            # Bayesian search for alpha
+            bayes = BayesSearchCV(
                 Ridge(),
-                {"alpha": np.logspace(-2, 3, 20)},
-                cv=3,
+                {"alpha": Real(1e-3, 1e2, prior="log-uniform")},
+                n_iter=15,
+                cv=TimeSeriesSplit(n_splits=3),
                 scoring="neg_mean_absolute_error",
-                verbose=1,
+                random_state=41,
+                verbose=0,
                 n_jobs=2
             )
-            pipe = Pipeline([("prep", self.transformer), ("model", ridge_grid)])
+            pipe = Pipeline([("prep", self.transformer), ("model", bayes)])
             pipe.fit(X_train, y_train)
 
             y_pred = pipe.predict(X_test)
@@ -202,7 +203,7 @@ class RidgeRunner:
             preds.append(X_test_flat)
 
         preds_df = pd.concat(preds, axis=0)
-        out_path = self.root / self.cfg["processed_path"] / "predictions_lin.parquet"
+        out_path = self.root / self.cfg["processed_path"] / "predictions_ridge.parquet"
         preds_df.to_parquet(out_path)
         return pd.DataFrame(rows)
 
