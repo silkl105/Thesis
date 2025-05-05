@@ -14,3 +14,4 @@ raw_files:
   unemloyment_rate: data/raw/nld_unemployment.csv
   processed_transactions: "data/processed/processed_data.parquet"
   processed_lin: data/processed/processed_data_lin.parquet
+  processed_xgb: data/processed/processed_data_xgb.parquet
