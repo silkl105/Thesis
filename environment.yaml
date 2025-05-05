@@ -6,6 +6,7 @@ dependencies:
   - python=3.11
   - pandas=2.2.3
   - numpy=2.2.2
+  - scikit-optimize=0.10.2
   - pyreadr
   - ipykernel
   - matplotlib=3.8.2
@@ -20,4 +21,5 @@ dependencies:
   - plotly=5.22.0
   - pyarrow=19.0.1
   - duckdb=1.2.1
+  - mgwr=2.1.2
   - xlsxwriter
