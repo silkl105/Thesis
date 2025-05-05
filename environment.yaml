@@ -22,4 +22,5 @@ dependencies:
   - pyarrow=19.0.1
   - duckdb=1.2.1
   - mgwr=2.1.2
+  - hyperopt=0.2.7
   - xlsxwriter
