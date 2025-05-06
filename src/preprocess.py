@@ -251,6 +251,7 @@ class DataProcessor:
             # Quality: merge small category based on mean price ladders
             "qual_outside": {
                 "onbekend [MP]": "slecht",
+                "natig": "matig"
             },
             # Shed: price driven mainly by material, not siting
             "shed": {
@@ -270,14 +271,19 @@ class DataProcessor:
             )
 
         # Encode quality levels as one ordered category (high correlation)
-        qual_levels = ["slecht", "slecht tot matig", "matig", "matig tot redelijk",
-                       "redelijk", "redelijk tot goed", "goed",
-                       "goed tot uitstekend", "uitstekend"]
-
+        qual_levels = [
+            "slecht", "slecht tot matig", "matig", "matig tot redelijk",
+            "redelijk", "redelijk tot goed", "goed",
+            "goed tot uitstekend", "uitstekend"
+        ]
         for qcol in ["qual_inside", "qual_outside"]:
-            df[qcol] = pd.Categorical(
-                df[qcol], categories=qual_levels, ordered=True
-            ).codes
+            cat = pd.Categorical(df[qcol], categories=qual_levels, ordered=True)
+            if cat.isna().any():
+                raise ValueError(
+                    f"Column {qcol} contains values not in the expected quality levels {qual_levels}: "
+                    f"{df.loc[cat.isna(), qcol].unique().tolist()}"
+                )
+            df[qcol] = cat.codes + 1  # shift to 1–9
 
         df['quality'] = (df['qual_inside'] + df['qual_outside']) / 2
         df = df.drop(columns=['qual_inside', 'qual_outside'])
