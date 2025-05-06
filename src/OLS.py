@@ -9,9 +9,8 @@ from __future__ import annotations
   training data for three predefined NUTS3 region groups, and
   predictions are made on the corresponding test observations.
   Forecast accuracy metrics are stored to Excel, one row per fold.
-* A global full-sample OLS is also fitted for coefficient interpretation.
-  We report point estimates + heteroskedasticity-robust HC3 s.e.,
-  and map each term to feature clusters as in RidgeRunner.
+* Average coefficients and cluster summaries are computed from region-specific
+  models fitted on the last CV fold for coefficient interpretation.
 """
 
 from pathlib import Path
@@ -54,7 +53,7 @@ def _mdape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 
 class OLSRunner:
     """
-    Run region-specific OLS-CV + global OLS on the processed dataset.
+    Run region-specific OLS-CV, compute average last-fold coefficients, and diagnostics.
 
     Parameters
     ----------
@@ -103,11 +102,13 @@ class OLSRunner:
         )
 
         self._fold_info: List[Dict] = []
+        # Store fitted region-specific OLS models from last CV fold for coefficient averaging
+        self.last_fold_models: List[LinearRegression] = []
 
     def run(self) -> None:
         """Execute full workflow and dump Excel workbook."""
         cv_df, cv_by_model_df = self._ols_cv()
-        coef_df, cluster_df = self._ols_full()
+        coef_df, cluster_df = self._ols_last_cv()
         diag_df = self._compute_diagnostics()
 
         with pd.ExcelWriter(self.metrics_path, engine="xlsxwriter") as xls:
@@ -127,6 +128,9 @@ class OLSRunner:
         Fits three separate OLS regressions per fold on predefined
         NUTS3 groups, then aggregates predictions and computes metrics.
         """
+        # Reset storage of last fold models
+        self.last_fold_models = []
+
         # define region groups
         region_groups = {
             "model1": ["212", "213", "221", "225", "230"],
@@ -183,6 +187,10 @@ class OLSRunner:
                 # Fit plain OLS via scikit-learn
                 ols = LinearRegression(n_jobs=-1)
                 ols.fit(X_tr_arr, y_train[mask_train])
+
+                # Save region-specific model from the last fold for later averaging
+                if fold == n_splits:
+                    self.last_fold_models.append(ols)
 
                 y_pred = ols.predict(X_te_arr)
 
@@ -248,53 +256,6 @@ class OLSRunner:
         cv_by_model_df = pd.DataFrame(rows_model)
         return cv_df, cv_by_model_df
 
-    def _ols_full(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """Fit OLS once (full sample) and return coefficient tables."""
-        X_all = pd.DataFrame(
-            self.transformer.fit_transform(self.X),
-            columns=self._out_cols(), dtype=float
-        )
-        X_all = sm.add_constant(X_all, has_constant="add")
-        model = sm.OLS(self.y, X_all).fit(cov_type="HC3")
-
-        params = model.params
-        se = model.bse
-        pvalues = model.pvalues
-        ci = model.conf_int()
-        coef_df = pd.DataFrame({
-            "term": params.index,
-            "coef": params.values,
-            "se_robust": se.values,
-            "p_value": pvalues.values,
-            "[0.025": ci[0].values,
-            "0.975]": ci[1].values,
-        })
-
-        # cluster mapping same as in RidgeRunner
-        clusters: Dict[str, List[str]] = {
-            "coordinates": ["lat", "lon"],
-            "region": [c for c in coef_df.term if c.startswith("nuts3_")],
-            "temporal": ["date_of_listing", "month_sin", "month_cos", "construction_yr"],
-            "property_size": ["unit_surface", "gross_volume", "parcel_surface", "rooms_nr"],
-            "property_quality": ["quality"] + [c for c in coef_df.term if c.startswith("shed_")],
-            "property_type": [c for c in coef_df.term if c.startswith(("property_class_", "property_type_"))],
-            "lags": ["pc6_price_2y_prior", "pc6_price_6m_minus_2y", "global_price_6m_prior", "global_price_1m_minus_6m"],
-            "economy": ["ciss", "unemployment_rate", "mortgage_rate"],
-        }
-
-        sums = []
-        for clust, terms in clusters.items():
-            mask = coef_df.term.isin(terms)
-            if mask.any():
-                coefs = coef_df.loc[mask, "coef"].values
-                sums.append({
-                    "cluster": clust,
-                    "n_terms": mask.sum(),
-                    "l2_norm": float(np.linalg.norm(coefs)),
-                    "sum_coef": float(coefs.sum()),
-                })
-        cluster_df = pd.DataFrame(sums)
-        return coef_df, cluster_df
 
     def _compute_diagnostics(self) -> pd.DataFrame:
         """Compute the same diagnostics on full sample as RidgeRunner."""
@@ -326,6 +287,58 @@ class OLSRunner:
             "bp_pvalue": lm_p,
             "dw": dw
         }])
+
+    def _ols_last_cv(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Compute average coefficients and cluster summaries for the region-specific
+        OLS models fitted on the last CV fold.
+
+        Returns
+        -------
+        coef_df : pd.DataFrame
+            DataFrame with 'term' and 'coef' columns for average coefficients,
+            including the intercept ('const').
+        cluster_df : pd.DataFrame
+            DataFrame summarizing clusters with columns:
+            'cluster', 'n_terms', 'l2_norm', 'sum_coef'.
+        """
+        # Construct feature names including intercept
+        feature_names = ['const'] + self._out_cols()
+        # Stack coefficient arrays from saved models
+        coef_matrix = np.vstack([
+            np.concatenate(([model.intercept_], model.coef_))
+            for model in self.last_fold_models
+        ])
+        # Compute average coefficients
+        avg_coefs = coef_matrix.mean(axis=0)
+        coef_df = pd.DataFrame({'term': feature_names, 'coef': avg_coefs})
+
+        # Define clusters same as in _ols_full
+        clusters: Dict[str, List[str]] = {
+            "coordinates": ["lat", "lon"],
+            "region": [c for c in coef_df.term if c.startswith("nuts3_")],
+            "temporal": ["date_of_listing", "month_sin", "month_cos", "construction_yr"],
+            "property_size": ["unit_surface", "gross_volume", "parcel_surface", "rooms_nr"],
+            "property_quality": ["quality"] + [c for c in coef_df.term if c.startswith("shed_")],
+            "property_type": [c for c in coef_df.term if c.startswith(("property_class_", "property_type_"))],
+            "lags": ["pc6_price_2y_prior", "pc6_price_6m_minus_2y", "global_price_6m_prior", "global_price_1m_minus_6m"],
+            "economy": ["ciss", "unemployment_rate", "mortgage_rate"],
+        }
+
+        # Summarize clusters
+        sums = []
+        for cluster, terms in clusters.items():
+            mask = coef_df.term.isin(terms)
+            if mask.any():
+                coefs = coef_df.loc[mask, "coef"].values
+                sums.append({
+                    "cluster": cluster,
+                    "n_terms": int(mask.sum()),
+                    "l2_norm": float(np.linalg.norm(coefs)),
+                    "sum_coef": float(coefs.sum()),
+                })
+        cluster_df = pd.DataFrame(sums)
+        return coef_df, cluster_df
 
     def _out_cols(self) -> List[str]:
         """Return transformed column order (excluding intercept)."""
