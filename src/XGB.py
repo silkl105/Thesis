@@ -120,7 +120,7 @@ class XGBRunner:
 
         # ------------------------------------------------------------------ #
         # load XGB‑design matrix                                             #
-        proc_file = self.root / self.cfg["raw_files"]["processed_xgb"]
+        proc_file = self.root / self.cfg["raw_files"]["processed_data"]
         if not proc_file.exists():
             raise FileNotFoundError(proc_file)
         self.df = pd.read_parquet(proc_file)
@@ -196,7 +196,7 @@ class XGBRunner:
                 model = XGBRegressor(
                     objective="reg:absoluteerror",
                     tree_method="hist",
-                    enable_categorical=True,
+                    enable_categorical=False,
                     n_jobs=-1,
                     random_state=41,
                     eval_metric="mae",

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import duckdb
 import geopandas as gpd
@@ -63,28 +63,26 @@ class DataProcessor:
         ]
 
     # public driver ---------------------------------------------------
-    def process_all(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    def process_all(self) -> pd.DataFrame:
         """
-        Run the full pipeline and optionally store the raw-feature parquet.
+        Run the full pipeline end‑to‑end and return a single, modelling‑ready
+        DataFrame.
 
         Returns
         -------
-        df_raw, df_xgb, df_lin
-            * df_raw: after feature engineering but before category collapse.
-            * df_xgb: ready for tree models.
-            * df_lin: one-hot / ordinal-encoded for OLS.
+        pd.DataFrame
+            All‑numeric feature table suitable for both tree‑based and linear
+            models and compatible with interventional SHAP.
         """
         df = self.load_transactions()
         df = self.clean(df)
         df_feat = self.feature_engineering(df)
-        df_xgb, df_lin = self.clean_2(df_feat.copy())
+        df_final = self._final_prep(df_feat.copy())
 
         if self.save_option:
-            self.save_processed(df_feat, "processed_data.parquet")
-            self.save_processed(df_xgb, "processed_data_xgb.parquet")
-            self.save_processed(df_lin, "processed_data_lin.parquet")
+            self.save_processed(df_final, "processed_data.parquet")
         else:
-            return df_feat, df_xgb, df_lin
+            return df_final
 
     # stage 1 – ingest ---------------------------------------------------
     def load_transactions(self) -> pd.DataFrame:
@@ -228,16 +226,16 @@ class DataProcessor:
         return df
 
     # stage 4 – final modelling prep -------------------------------------
-    def clean_2(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    def _final_prep(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Collapse sparse categories (why each collapse is done is noted
-        inline), then emit two parquet files:
-
-        * processed_data_xgb.parquet: minimal feature engineering.
-        * processed_data_lin.parquet: one-hot & ordinal encoded.
+        Collapse sparse categories, ordinal‑encode quality, one‑hot encode
+        nominal categoricals, drop unused columns, and ensure every column
+        is numeric.  The resulting DataFrame can be fed to both tree models
+        (e.g. XGBoost) and linear models while remaining compatible with
+        interventional SHAP.
         """
         df = df.copy()
-        
+
         # ---------- category collapses ---------------------------------
         df["use_type"] = pd.Series(
             np.where(df["use_type"] == "woonfunctie", "woonfunctie", "other"),
@@ -270,17 +268,17 @@ class DataProcessor:
             df[col] = (
                 df[col].astype(str).replace(mapper).astype("category")
             )
-        
+
         # Encode quality levels as one ordered category (high correlation)
         qual_levels = ["slecht", "slecht tot matig", "matig", "matig tot redelijk",
-                       "redelijk", "redelijk tot goed", "goed", 
+                       "redelijk", "redelijk tot goed", "goed",
                        "goed tot uitstekend", "uitstekend"]
-        
+
         for qcol in ["qual_inside", "qual_outside"]:
             df[qcol] = pd.Categorical(
                 df[qcol], categories=qual_levels, ordered=True
             ).codes
-        
+
         df['quality'] = (df['qual_inside'] + df['qual_outside']) / 2
         df = df.drop(columns=['qual_inside', 'qual_outside'])
 
@@ -299,53 +297,51 @@ class DataProcessor:
             "date_of_transaction_yearquarter",
             "date_of_transaction_year",
             "date_of_transaction_month",
-            "pc6", "pc5", "pc4", "province", # duplicate info with nuts3_region and lon/lat
-            "place", "nuts2_region",         # duplicate info with nuts3_region and lon/lat
-            "construction_per",              # duplicate info with construction_yr
-            "use_type"                       # small categories, adds insignificant amount of predictive power
+            "pc6", "pc5", "pc4", "province",
+            "place", "nuts2_region",
+            "construction_per",
+            "use_type"
         ]
-        df_xgb = df.drop(columns=drop_cols).copy()
+        df_final = df.drop(columns=drop_cols).copy()
 
         # -- drop temporal duplicates --------------------------------------
         drop_temp = ["date_of_listing_year", "date_of_listing_yearquarter", "date_of_listing_month"]
-        df_xgb.drop(columns=drop_temp, inplace=True, errors="ignore")
+        df_final.drop(columns=drop_temp, inplace=True, errors="ignore")
 
         # -- global lags: keep only 6-month level + diff -------------------
-        df_xgb["global_price_1m_minus_6m"] = (
-            df_xgb["global_price_1m_prior"] - df_xgb["global_price_6m_prior"]
+        df_final["global_price_1m_minus_6m"] = (
+            df_final["global_price_1m_prior"] - df_final["global_price_6m_prior"]
         )
-        df_xgb.drop(columns=["global_price_1m_prior"], inplace=True)
+        df_final.drop(columns=["global_price_1m_prior"], inplace=True)
 
         # -- local lags: keep only 2-year level + diff -------------------
-        df_xgb["pc6_price_6m_minus_2y"] = (
-            df_xgb["pc6_price_6m_prior"] - df_xgb["pc6_price_2y_prior"]
+        df_final["pc6_price_6m_minus_2y"] = (
+            df_final["pc6_price_6m_prior"] - df_final["pc6_price_2y_prior"]
         )
-        df_xgb.drop(columns=["pc6_price_6m_prior"], inplace=True)
+        df_final.drop(columns=["pc6_price_6m_prior"], inplace=True)
 
-        df_xgb["date_of_listing"] = df_xgb["date_of_listing"].apply(lambda d: d.toordinal())
-        df_xgb = df_xgb.sort_values('date_of_listing')
+        df_final["date_of_listing"] = df_final["date_of_listing"].apply(lambda d: d.toordinal())
+        df_final = df_final.sort_values('date_of_listing')
 
-        # ---------- OLS encoding --------------------------------------
-        df_lin = df_xgb.copy()
-
-        df_lin = pd.get_dummies(
-            df_lin,
+        # One-hot encode nominal categoricals
+        df_final = pd.get_dummies(
+            df_final,
             columns=[
                 "property_class",
                 "property_type",
                 "shed",
                 "nuts3_region",
-                "monument"
+                "monument",
             ],
             drop_first=True,
         )
 
         # Change boolean columns to 0/1
-        bool_cols = df_lin.select_dtypes(include=['bool']).columns
-        df_lin[bool_cols] = df_lin[bool_cols].astype(float)
-        df_lin = df_lin.sort_values('date_of_listing')
+        bool_cols = df_final.select_dtypes(include=['bool']).columns
+        df_final[bool_cols] = df_final[bool_cols].astype(float)
+        df_final = df_final.sort_values('date_of_listing')
 
-        return df_xgb, df_lin
+        return df_final
 
     # basic I/O helpers -------------------------------------------------
     def save_processed(self, df: pd.DataFrame, filename: str) -> None:

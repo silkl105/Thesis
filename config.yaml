@@ -12,6 +12,4 @@ raw_files:
   mortgage_rate: data/raw/nld_mortgage_rate.csv
   systemic_stress: data/raw/nld_systemic_stress.csv
   unemloyment_rate: data/raw/nld_unemployment.csv
-  processed_transactions: "data/processed/processed_data.parquet"
-  processed_lin: data/processed/processed_data_lin.parquet
-  processed_xgb: data/processed/processed_data_xgb.parquet
+  processed_data: "data/processed/processed_data.parquet"
