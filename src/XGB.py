@@ -1,33 +1,28 @@
 from __future__ import annotations
 """
-src/XGB.py – Expanding‑window CV for XGBoost price model
+src/XGB.py - Expanding-window CV for XGBoost price model
 =======================================================
 
-* 10‑fold expanding‑window **TimeSeriesSplit** (≈ 80 / 20 within each fold)
-  on the *tree‑ready* feature set written by `DataProcessor`  
-  (parquet path configured in *config.yaml* → ``raw_files.processed_xgb``).
+* 10-fold expanding-window **TimeSeriesSplit** (≈80/20 within each fold)
+  on the *tree-ready* feature set written by `DataProcessor`  
+  (parquet path configured in *config.yaml* → ``raw_files.processed_xgb``).
 
-* Within each outer fold we run a **Bayesian hyper‑parameter search**
-  (`BayesSearchCV`, 50 iterations ⌛) over the most influential XGBoost
-  parameters reported in recent housing‑price literature
-  (Sharma et al. 2024, MDPI 2023, Jetir 2024, *inter alia*).
+* Within each outer fold we run a **Bayesian hyper-parameter search**
+  (`BayesSearchCV`, 50 iterations) over the most influential XGBoost
+  parameters reported in recent housing-price literature
+  (Sharma et al. 2024, MDPI 2023, Jetir 2024, *inter alia*).
 
 * Early stopping is enabled with 10 rounds of no improvement on MAE
   using the *reg:absoluteerror* objective.
 
 * The final **best estimator per fold** is persisted to
-
       data/processed/xgb_model_fold_{fold}.pkl
+  so SHAP diagnostics can later be run without re-training.
 
-  so SHAP diagnostics can later be run without re‑training.
-
-* Out‑of‑fold predictions are stored in
-
+* Out-of-fold predictions are stored in
       <processed_path>/predictions_xgb.parquet
-
-  and fold‑level accuracy metrics (RMSE, MAE, MAPE, MDAPE, ±% thresholds) go
-  to a single‑sheet Excel workbook
-
+  and fold-level accuracy metrics (RMSE, MAE, MAPE, MDAPE, ±% thresholds) go
+  to a single-sheet Excel workbook
       data/processed/xgb_results.xlsx  →  sheet ``xgb_cv``.
 """
 
@@ -42,8 +37,6 @@ import yaml
 from hyperopt import fmin, tpe, hp, Trials, STATUS_OK, space_eval
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.model_selection import TimeSeriesSplit
-from sklearn.pipeline import Pipeline
-# use auto to get proper notebook / console behaviour
 from tqdm.auto import tqdm
 from xgboost import XGBRegressor
 
@@ -103,8 +96,8 @@ class XGBRunner:
 
     * Within each outer fold we run a **hyper-parameter search** using
       `hyperopt` (TPE, 50 evaluations) over the most influential XGBoost
-      parameters reported in recent housing‑price literature
-      (Sharma et al. 2024, MDPI 2023, Jetir 2024, *inter alia*).
+      parameters reported in recent housing-price literature
+      (Sharma et al. 2024, MDPI 2023, Jetir 2024, *inter alia*).
 
     * Early stopping is enabled with 10 rounds of no improvement on MAE
       using the *reg:absoluteerror* objective.
