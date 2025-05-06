@@ -1,7 +1,7 @@
 # Data paths relative to project root
 raw_path: "data/raw"
 processed_path: "data/processed"
-figs_path: "figs"
+shap_path: "data/processed/shap"
 
 # Specific data files
 raw_files:
@@ -12,4 +12,4 @@ raw_files:
   mortgage_rate: data/raw/nld_mortgage_rate.csv
   systemic_stress: data/raw/nld_systemic_stress.csv
   unemloyment_rate: data/raw/nld_unemployment.csv
-  processed_data: "data/processed/processed_data.parquet"
+  processed_data: data/processed/processed_data.parquet

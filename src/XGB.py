@@ -126,7 +126,6 @@ class XGBRunner:
         self.df = pd.read_parquet(proc_file)
 
         self.y = self.df[self.target].astype(float).values
-        # Keep features **as‑is** (XGBoost handles categoricals natively)
         self.X = self.df.drop(columns=[self.target])
 
         self._fold_info: List[Dict] = []

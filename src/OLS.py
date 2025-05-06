@@ -79,7 +79,7 @@ class OLSRunner:
         self.dp = DataProcessor()
 
         # load linear design matrix
-        proc_file = self.root / self.cfg["raw_files"]["processed_lin"]
+        proc_file = self.root / self.cfg["raw_files"]["processed_data"]
         if not proc_file.exists():
             raise FileNotFoundError(proc_file)
         self.df = pd.read_parquet(proc_file)
