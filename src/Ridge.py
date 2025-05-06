@@ -8,11 +8,7 @@ from __future__ import annotations
   The best regularisation strength (λ) is chosen inside each fold via
   Bayesian hyperparameter search (BayesSearchCV) with time-aware splits.
   Forecast accuracy metrics are stored to Excel, one row per fold.
-* OLS (same design matrix) fitted once to the whole sample for
-  coefficient interpretation only.  We report point estimates +
-  heteroskedasticity-robust HC3 s.e., and map each term to a manual
-  feature cluster so the user can also read aggregate effects by block
-  of variables.
+* Coefficients and cluster summaries are reported for the Ridge model trained on the last CV fold.
 """
 
 from pathlib import Path
@@ -63,7 +59,7 @@ def _mdape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 # main class -----------------------------------------------------------
 class RidgeRunner:
     """
-    Run Ridge-CV + OLS on the processed linear dataset.
+    Run Ridge-CV, report last-fold Ridge coefficients, and diagnostics on the processed dataset.
 
     Parameters
     ----------
@@ -105,6 +101,8 @@ class RidgeRunner:
             remainder="drop",
         )
         self._fold_info = []
+        # Store pipeline from the last CV fold for coefficient reporting
+        self.last_fold_pipe: Optional[Pipeline] = None
 
     # ------------------------------------------------------------------
     # public driver -----------------------------------------------------
@@ -114,12 +112,12 @@ class RidgeRunner:
         Runs Ridge-CV, OLS, and diagnostics, and writes all outputs to Excel.
         """
         cv_df = self._ridge_cv()
-        coef_df, cluster_df = self._ols_full()
+        coef_df, cluster_df = self._ridge_last_cv()
         diag_df = self._compute_diagnostics()
 
         with pd.ExcelWriter(self.metrics_path, engine="xlsxwriter") as xls:
             cv_df.to_excel(xls, sheet_name="ridge_cv", index=False)
-            coef_df.to_excel(xls, sheet_name="ols_coef", index=False)
+            coef_df.to_excel(xls, sheet_name="ridge_coef", index=False)
             cluster_df.to_excel(xls, sheet_name="cluster_coef", index=False)
             diag_df.to_excel(xls, sheet_name="diagnostics", index=False)
         print(f"✓ Results written to {self.metrics_path.relative_to(self.root)}")
@@ -153,7 +151,7 @@ class RidgeRunner:
             # Bayesian search for alpha
             bayes = BayesSearchCV(
                 Ridge(),
-                {"alpha": Real(1e-3, 1e2, prior="log-uniform")},
+                {"alpha": Real(1e-4, 1e4, prior="log-uniform")},
                 n_iter=15,
                 cv=TimeSeriesSplit(n_splits=3),
                 scoring="neg_mean_absolute_error",
@@ -163,6 +161,9 @@ class RidgeRunner:
             )
             pipe = Pipeline([("prep", self.transformer), ("model", bayes)])
             pipe.fit(X_train, y_train)
+            # Save pipeline of the last CV fold for later coefficient extraction
+            if fold == n_splits:
+                self.last_fold_pipe = pipe
 
             y_pred = pipe.predict(X_test)
 
@@ -208,66 +209,6 @@ class RidgeRunner:
         return pd.DataFrame(rows)
 
     # ------------------------------------------------------------------
-    # internal – OLS ----------------------------------------------------
-    def _ols_full(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """Fit OLS once (full sample) and return coef tables."""
-        X_all = pd.DataFrame(
-            self.transformer.fit_transform(self.X),
-            columns=self._out_cols(),
-            dtype=float
-        )
-        X_all = sm.add_constant(X_all, has_constant="add")
-        model = sm.OLS(self.y, X_all).fit(cov_type="HC3")
-
-        params = model.params
-        se = model.bse
-        pvalues = model.pvalues
-        ci = model.conf_int()
-        coef_df = pd.DataFrame({
-            "term": params.index,
-            "coef": params.values,
-            "se_robust": se.values,
-            "p_value": pvalues.values,
-            "[0.025": ci[0].values,
-            "0.975]": ci[1].values,
-        })
-
-        # ------- cluster mapping --------------------------------------
-        clusters: Dict[str, List[str]] = {
-            # — spatial ---------------------------------------------------
-            "coordinates": ["lat", "lon"],
-            "region": [c for c in coef_df.term if c.startswith("nuts3_")],
-
-            # — temporal / age -------------------------------------------
-            "temporal": ["date_of_listing", "month_sin", "month_cos", "construction_yr"],
-
-            # — dwelling characteristics ---------------------------------
-            "property_size": ["unit_surface", "gross_volume", "parcel_surface", "rooms_nr"],
-            "property_quality": ["quality"] + [c for c in coef_df.term if c.startswith("shed_")],
-            "property_type": [c for c in coef_df.term if c.startswith(("property_class_", "property_type_"))],
-
-            # — price anchors & macro ------------------------------------
-            "lags": ["pc6_price_2y_prior", "pc6_price_6m_minus_2y",
-                     "global_price_6m_prior", "global_price_1m_minus_6m"],
-            "economy": ["ciss", "unemployment_rate", "mortgage_rate"],
-        }
-
-        sums = []
-        for clust, terms in clusters.items():
-            # filter present terms only (one‑hot cols may be missing)
-            mask = coef_df.term.isin(terms)
-            if mask.any():
-                coefs = coef_df.loc[mask, "coef"].values
-                sums.append({
-                    "cluster": clust,
-                    "n_terms": mask.sum(),
-                    "l2_norm": float(np.linalg.norm(coefs)),
-                    "sum_coef": float(coefs.sum()),
-                })
-        cluster_df = pd.DataFrame(sums)
-        return coef_df, cluster_df
-
-    # ------------------------------------------------------------------
     def _compute_diagnostics(self) -> pd.DataFrame:
         """Compute diagnostics once for the whole dataset:
         - Top 5 VIFs (variance inflation factors)
@@ -309,6 +250,55 @@ class RidgeRunner:
             "bp_pvalue": lm_pvalue,
             "dw": dw
         }])
+
+    def _ridge_last_cv(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Compute coefficients and cluster summaries for the Ridge model
+        fitted on the last CV fold.
+
+        Returns
+        -------
+        coef_df : pd.DataFrame
+            DataFrame with 'term' and 'coef' columns for the intercept and features.
+        cluster_df : pd.DataFrame
+            DataFrame summarizing clusters with columns:
+            'cluster', 'n_terms', 'l2_norm', 'sum_coef'.
+        """
+        # Extract the best Ridge estimator from the last fold pipeline
+        ridge: Ridge = self.last_fold_pipe.named_steps["model"].best_estimator_
+        # Build feature names including intercept
+        feature_names = ["const"] + self._out_cols()
+        # Get coefficient array
+        coef_arr = np.concatenate(([ridge.intercept_], ridge.coef_))
+        coef_df = pd.DataFrame({"term": feature_names, "coef": coef_arr})
+
+        # Define clusters (same mapping as OLS)
+        clusters: Dict[str, List[str]] = {
+            "coordinates": ["lat", "lon"],
+            "region": [c for c in coef_df.term if c.startswith("nuts3_")],
+            "temporal": ["date_of_listing", "month_sin", "month_cos", "construction_yr"],
+            "property_size": ["unit_surface", "gross_volume", "parcel_surface", "rooms_nr"],
+            "property_quality": ["quality"] + [c for c in coef_df.term if c.startswith("shed_")],
+            "property_type": [c for c in coef_df.term if c.startswith(("property_class_", "property_type_"))],
+            "lags": ["pc6_price_2y_prior", "pc6_price_6m_minus_2y",
+                     "global_price_6m_prior", "global_price_1m_minus_6m"],
+            "economy": ["ciss", "unemployment_rate", "mortgage_rate"],
+        }
+
+        # Summarize clusters
+        sums = []
+        for cluster, terms in clusters.items():
+            mask = coef_df.term.isin(terms)
+            if mask.any():
+                vals = coef_df.loc[mask, "coef"].values
+                sums.append({
+                    "cluster": cluster,
+                    "n_terms": int(mask.sum()),
+                    "l2_norm": float(np.linalg.norm(vals)),
+                    "sum_coef": float(vals.sum()),
+                })
+        cluster_df = pd.DataFrame(sums)
+        return coef_df, cluster_df
 
     # ------------------------------------------------------------------
     def _out_cols(self) -> List[str]:
