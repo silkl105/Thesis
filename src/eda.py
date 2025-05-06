@@ -39,7 +39,7 @@ class EDA:
         self.fig_dir.mkdir(parents=True, exist_ok=True)
         self.save_option = save_option
 
-        processed = self.root / self.cfg["raw_files"]["processed_transactions"]
+        processed = self.root / self.cfg["raw_files"]["preprocessed_data"]
         if not processed.is_file():
             raise FileNotFoundError(f"Processed data missing: {processed}")
         self.df = pd.read_parquet(processed)

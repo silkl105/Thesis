@@ -2,6 +2,7 @@
 raw_path: "data/raw"
 processed_path: "data/processed"
 shap_path: "data/processed/shap"
+figs_path: "data/processed/figs"
 
 # Specific data files
 raw_files:
@@ -13,3 +14,4 @@ raw_files:
   systemic_stress: data/raw/nld_systemic_stress.csv
   unemloyment_rate: data/raw/nld_unemployment.csv
   processed_data: data/processed/processed_data.parquet
+  preprocessed_data: data/processed/preprocessed_data.parquet

@@ -65,13 +65,13 @@ class DataProcessor:
     # public driver ---------------------------------------------------
     def process_all(self) -> pd.DataFrame:
         """
-        Run the full pipeline end‑to‑end and return a single, modelling‑ready
+        Run the full pipeline end-to-end and return a single, modelling-ready
         DataFrame.
 
         Returns
         -------
         pd.DataFrame
-            All‑numeric feature table suitable for both tree‑based and linear
+            All-numeric feature table suitable for both tree-based and linear
             models and compatible with interventional SHAP.
         """
         df = self.load_transactions()
@@ -80,6 +80,7 @@ class DataProcessor:
         df_final = self._final_prep(df_feat.copy())
 
         if self.save_option:
+            self.save_processed(df_feat, "preprocessed_data.parquet")
             self.save_processed(df_final, "processed_data.parquet")
         else:
             return df_final
