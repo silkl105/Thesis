@@ -253,7 +253,8 @@ class XGBRunner:
                 / self.cfg["processed_path"]
                 / f"xgb_model_fold_{fold}.pkl"
             )
-            joblib.dump(final_model, mdl_path)
+            if fold == 10:
+                joblib.dump(final_model, mdl_path)
 
             # --- metrics on EUR scale ------------------------------------ #
             rmse = np.sqrt(mean_squared_error(np.expm1(y_test), np.expm1(y_pred)))

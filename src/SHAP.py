@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 """
-src/SHAP.py – SHAP diagnostics for the XGBoost price model (global, local & categorical plots)
+src/SHAP.py - SHAP diagnostics for the XGBoost price model (global, local & categorical plots)
 =============================================================================================
 
 This module provides :class:`XGBSHAPAnalyzer`, a lightweight helper that
-loads the **fold‑10** XGBoost model trained by :class:`~src.XGB.XGBRunner`,
-computes SHAP values on the *tree‑ready* feature matrix, and writes tidy
+loads the **fold-10** XGBoost model trained by :class:`~src.XGB.XGBRunner`,
+computes SHAP values on the *tree-ready* feature matrix, and writes tidy
 Excel summaries of
 
-* per‑feature importance (mean │SHAP│),
+* per-feature importance (mean │SHAP│),
 * aggregated cluster contributions (same taxonomy as OLS/Ridge runners).
 
-Optionally, one‑hot dummies can be **collapsed** back to their parent categorical feature for global importance metrics and summary plots (`collapse_categories=True`).
+Optionally, one-hot dummies can be **collapsed** back to their parent categorical feature for global importance metrics and summary plots (`collapse_categories=True`).
 
 The heavy lifting is delegated to *shap.TreeExplainer* which is fast on
 tree models, so even a fairly large dataset is handled comfortably.
@@ -28,8 +28,6 @@ import matplotlib.pyplot as plt
 import matplotlib
 import yaml
 from collections import defaultdict
-
-# SHAP colour maps (falls back gracefully for older versions)
 try:
     from shap.plots import colors as shap_colors  # type: ignore
 except ImportError:  # pragma: no cover – legacy SHAP
@@ -503,7 +501,6 @@ class SHAPAnalyzer:
         * Bar chart of top-20 mean │SHAP│ values.
         * Heat-map of top features across all samples.
         * Additional domain-driven dependence plots for specific feature pairs.
-        * NUTS3 region dependence plot (aggregated by nuts3_region, colored by construction_yr).
         * Categorical dependence plots and local waterfall explanations.
         """
         shap_vals = self._compute_shap_values()
@@ -589,19 +586,37 @@ class SHAPAnalyzer:
         shap_vals: np.ndarray,
         indices: Optional[List[int]] | None = None,
     ) -> None:
-        """Water‑fall explanations for selected sample indices.
+        """
+        Plot local SHAP waterfall explanations for selected sample indices.
+        If no indices are provided, defaults to the 100th and 1000th samples,
+        as well as the 10th highest and 10th lowest target values in the sample.
 
         Parameters
         ----------
-        shap_vals
-            Matrix returned by :pymeth:`_compute_shap_values`.
-        indices
-            Row indices **within the sampled subset** to visualise.  If
-            *None*, defaults to ``[9, 99, 999]`` (10th, 100th, 1000th rows)
-            – gracefully skipped if they exceed the available rows.
+        shap_vals : numpy.ndarray
+            Matrix returned by :meth:`_compute_shap_values`, shaped
+            (n_samples, n_features).
+        indices : list[int] or None, optional
+            Row indices within the sampled subset to visualize. If None,
+            defaults as described above.
         """
         if indices is None:
-            indices = [9, 99, 999]
+            n_samples = shap_vals.shape[0]
+            default_indices: list[int] = []
+            if n_samples >= 100:
+                default_indices.append(99)
+            if n_samples >= 1000:
+                default_indices.append(999)
+            # Determine sample target values
+            if isinstance(self._sample_idx, slice):
+                y_sample = self.y
+            else:
+                y_sample = self.y[self._sample_idx]
+            if y_sample.shape[0] >= 10:
+                sorted_idx = np.argsort(y_sample)
+                default_indices.append(int(sorted_idx[9]))
+                default_indices.append(int(sorted_idx[-10]))
+            indices = sorted(set(default_indices))
         max_row = shap_vals.shape[0] - 1
         for local_idx in indices:
             if local_idx > max_row:
